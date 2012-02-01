@@ -65,14 +65,23 @@ case class FiniteGenRes[+T](
 
 sealed trait FiniteGen[+T] extends Gen[FiniteGenRes[T]]
 
-
 /** Class that represents a generator. */
 sealed trait Gen[+T] {
 
   import Gen.choose
 
   var label = "" // TODO: Ugly mutable field
-
+    
+  def c[U >: T](u: U): Boolean = true
+  
+  def wc[U >: T](f: U => Boolean) = new Gen[U] {
+    override def apply(p: Gen.Params) = Gen.this.apply(p)
+    override def c[V >: U](v: V) = v match {
+      case u: U => f(u) // Note: this will always match because of erasure, but that should be ok
+      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
+    }
+  }
+    
   /** Put a label on the generator to make test reports clearer */
   def label(l: String): Gen[T] = {
     label = l
@@ -118,7 +127,7 @@ sealed trait Gen[+T] {
   def filter(p: T => Boolean): Gen[T] = Gen(prms => for {
     t <- this(prms)
     u <- if (p(t)) Some(t) else None
-  } yield u).label(label)
+  } yield u).label(label) wc { t => p(t) && this.c(t)}
 
   def withFilter(p: T => Boolean) = new GenWithFilter[T](this, p)
 

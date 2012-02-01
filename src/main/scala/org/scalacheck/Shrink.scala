@@ -13,7 +13,10 @@ import util.Buildable
 import scala.collection.{ JavaConversions => jcl }
 
 sealed abstract class Shrink[T] {
-  def shrink(x: T): Stream[T]
+  def shrink(x: T): Stream[T] 
+  def withGuard(g: T => Boolean) = new Shrink[T] {
+    override def shrink(x: T) = Shrink.this.shrink(x) filter g
+  } 
 }
 
 object Shrink {
@@ -29,12 +32,18 @@ object Shrink {
     else Stream(xs.head, ys.head) append interleave(xs.tail, ys.tail)
 
   /** Shrink instance factory */
+  @deprecated("pass a generator too!", "XXX")
   def apply[T](s: T => Stream[T]): Shrink[T] = new Shrink[T] {
-    override def shrink(x: T) = s(x)
+    override def shrink(x: T) = s(x)    
   }
+  
+  /*def apply[T](s: T => Stream[T], g: Gen[T]): Shrink[T] = new Shrink[T] {
+    override def shrink(x: T) = s(x) filter (g.canGenerate(_))   
+  }*/
 
   /** Shrink a value */
   def shrink[T](x: T)(implicit s: Shrink[T]): Stream[T] = s.shrink(x)
+  //def shrink[T](x: T, g: Gen[T])(implicit s: Shrink[T]): Stream[T] = s.shrink(x, g)
 
   /** Default shrink instance */
   implicit def shrinkAny[T]: Shrink[T] = Shrink(x => empty)
