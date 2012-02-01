@@ -43,8 +43,13 @@ object ShrinkGuardSpecification extends Properties("ShrinkGuard") {
   
   // Container sample
   val want = 3
-  val vg1 = listOfN(want, g2)
-  property("[listOfN] good shrink if no IOOBE and all three elem of ARG_0 is 1") = forAll(vg1) { xs: List[Int] =>
-    xs(2) > 3
-  }  
+  val cg1 = listOfN(want, g2)
+  property("[listOfN] good shrink if no IOOBE and all three elem of ARG_0 is 1") = forAll(cg1) { xs: List[Int] =>
+    xs(want - 1) > 3
+  }
+  
+  // Multi-generator forAll
+  val mg1 = choose(1, 10)
+  val mg2 = choose(2, 10)
+  property("[multi-gen forAll] good shrink if ARG_0 = (1, 2)") = forAll(mg1, mg2) { (x, y) => x > 3 && y > 3 }
 }
