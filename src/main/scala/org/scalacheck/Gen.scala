@@ -24,18 +24,18 @@ object Choose {
   implicit val chooseLong: Choose[Long] = new Choose[Long] {
     def choose(low: Long, high: Long) =
       if(low > high || (high-low < 0)) fail
-      else parameterized(prms => value(prms.choose(low,high)))
+      else parameterized(prms => value(prms.choose(low,high)), (x: Long) => (low <= x && x <= high))
   }
 
   implicit val chooseDouble: Choose[Double] = new Choose[Double] {
     def choose(low: Double, high: Double) =
       if (low > high || (high-low > Double.MaxValue)) fail
-      else parameterized(prms => value(prms.choose(low,high)))
+      else parameterized(prms => value(prms.choose(low,high)), (x: Double) => (x <= low && x <= high))
   }
 
   implicit val chooseInt: Choose[Int] = new Choose[Int] {
     def choose(low: Int, high: Int) =
-      chooseLong.choose(low, high).map(_.toInt)
+      chooseLong.choose(low, high).bimap(_.toInt, (x: Int) => Some(x.toLong))
   }
 
   implicit val chooseByte: Choose[Byte] = new Choose[Byte] {
@@ -72,16 +72,8 @@ sealed trait Gen[+T] {
 
   var label = "" // TODO: Ugly mutable field
     
-  def c[U >: T](u: U): Boolean = true
+  def c[U >: T](u: U): Boolean
   
-  def wc[U >: T](f: U => Boolean) = new Gen[U] {
-    override def apply(p: Gen.Params) = Gen.this.apply(p)
-    override def c[V >: U](v: V) = v match {
-      case u: U => f(u) // Note: this will always match because of erasure, but that should be ok
-      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
-    }
-  }
-    
   /** Put a label on the generator to make test reports clearer */
   def label(l: String): Gen[T] = {
     label = l
@@ -103,6 +95,9 @@ sealed trait Gen[+T] {
   def apply(prms: Gen.Params): Option[T]
 
   def map[U](f: T => U): Gen[U] = Gen(prms => this(prms).map(f)).label(label)
+  
+  def bimap[U, V >: T](f: T => U, g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f),
+    (u: U) => g(u) map { t => this.c(t) } getOrElse false).label(label)
 
   def map2[U, V](g: Gen[U])(f: (T, U) => V) =
     combine(g)((t, u) => t.flatMap(t => u.flatMap(u => Some(f(t, u)))))
@@ -127,7 +122,7 @@ sealed trait Gen[+T] {
   def filter(p: T => Boolean): Gen[T] = Gen(prms => for {
     t <- this(prms)
     u <- if (p(t)) Some(t) else None
-  } yield u).label(label) wc { t => p(t) && this.c(t)}
+  } yield u, (t:T) => p(t) && this.c(t)).label(label)
 
   def withFilter(p: T => Boolean) = new GenWithFilter[T](this, p)
 
@@ -229,9 +224,15 @@ object Gen {
     }
   }
 
+  private def alwaysTrue[T](t: T) = true
+
   /* Generator factory method */
-  def apply[T](g: Gen.Params => Option[T]) = new Gen[T] {
+  def apply[T](g: Gen.Params => Option[T], f: (T => Boolean) = alwaysTrue _) = new Gen[T] {
     def apply(p: Gen.Params) = g(p)
+    def c[U >: T](u: U) = u match {
+      case t: T => f(t) // Note: this will always match because of erasure, but that should be ok
+      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
+    }  
   }
 
   /* Convenience method for using the <code>frequency</code> method like this:
@@ -243,7 +244,8 @@ object Gen {
 
   /** Sequences generators. If any of the given generators fails, the
    *  resulting generator will also fail. */
-  def sequence[C[_],T](gs: Iterable[Gen[T]])(implicit b: Buildable[T,C]): Gen[C[T]] = Gen(prms => {
+  def sequence[C[_],T](gs: Iterable[Gen[T]], f: (C[T] => Boolean) = alwaysTrue _)(
+      implicit b: Buildable[T,C]): Gen[C[T]] = Gen(prms => {
     val builder = b.builder
     var none = false
     val xs = gs.iterator
@@ -252,13 +254,14 @@ object Gen {
       case Some(x) => builder += x
     }
     if(none) None else Some(builder.result())
-  })
+  }, f)
 
   /** Wraps a generator lazily. The given parameter is only evalutated once,
    *  and not until the wrapper generator is evaluated. */
   def lzy[T](g: => Gen[T]) = new Gen[T] {
     lazy val h = g
     def apply(prms: Params) = h(prms)
+    def c[U >: T](u: U): Boolean = h.c(u)
   }
 
   /** Wraps a generator for later evaluation. The given parameter is
@@ -279,10 +282,10 @@ object Gen {
   }
 
   /** Creates a generator that can access its generation parameters */
-  def parameterized[T](f: Params => Gen[T]): Gen[T] = Gen(prms => f(prms)(prms))
+  def parameterized[T](f: Params => Gen[T], g: (T => Boolean) = alwaysTrue _): Gen[T] = Gen(prms => f(prms)(prms), g)
 
   /** Creates a generator that can access its generation size */
-  def sized[T](f: Int => Gen[T]) = parameterized(prms => f(prms.size))
+  def sized[T](f: Int => Gen[T], g: (T => Boolean) = alwaysTrue _) = parameterized(prms => f(prms.size), g)
 
   /** Creates a resized version of a generator */
   def resize[T](s: Int, g: Gen[T]) = Gen(prms => g(prms.resize(s)))
@@ -327,6 +330,10 @@ object Gen {
       def hasNext = i < n
       def next = { i += 1; g }
     }
+  }, (ts: C[T]) => {
+    b.size(ts) map { k =>
+      n == k && b.forall(ts, {g c _})
+    } getOrElse false    
   })
 
   /** Generates a container of any type for which there exists an implicit

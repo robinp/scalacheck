@@ -18,12 +18,17 @@ trait Buildable[T,C[_]] {
     b ++= it
     b.result()
   }
+  // TODO make abstract once supported everywhere
+  def size(c: C[T]): Option[Int] = None
+  def forall(c: C[T], p: T => Boolean): Boolean = true
 }
 
 object Buildable {
 
   implicit def buildableList[T] = new Buildable[T,List] {
     def builder = new mutable.ListBuffer[T]
+    override def size(c: List[T]) = Some(c.size)
+    override def forall(c: List[T], p: T => Boolean) = c forall p
   }
 
   implicit def buildableStream[T] = new Buildable[T,Stream] {
