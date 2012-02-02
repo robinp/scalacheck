@@ -35,7 +35,7 @@ object Choose {
 
   implicit val chooseInt: Choose[Int] = new Choose[Int] {
     def choose(low: Int, high: Int) =
-      chooseLong.choose(low, high).bimap(_.toInt, (x: Int) => Some(x.toLong))
+      chooseLong.choose(low, high).bimap(_.toInt)(x => Some(x.toLong))
   }
 
   implicit val chooseByte: Choose[Byte] = new Choose[Byte] {
@@ -96,7 +96,7 @@ sealed trait Gen[+T] {
 
   def map[U](f: T => U): Gen[U] = Gen(prms => this(prms).map(f)).label(label)
   
-  def bimap[U, V >: T](f: T => U, g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f),
+  def bimap[U, V >: T](f: T => U)(g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f),
     (u: U) => g(u) map { t => this.c(t) } getOrElse false).label(label)
 
   def map2[U, V](g: Gen[U])(f: (T, U) => V) =
