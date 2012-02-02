@@ -38,7 +38,7 @@ object ShrinkGuardSpecification extends Properties("ShrinkGuard") {
   property("[FAIL map] good shrink if ARG_0 = 2") = forAll(g4)((n: Int) => n > 3)
 
   // Bijections work
-  val g5 = (g1 suchThat { x => (1 <= x && x <= 100)}).bimap[Int, Int](_ + 1)(x => Some(x - 1))
+  val g5: Gen[Int] = (g1 suchThat { x => (1 <= x && x <= 100)}).bimap(_ + 1)(x => Some(x - 1))
   property("[bimap] good shrink if ARG_0 = 2") = forAll(g5)((n: Int) => n > 3)
   
   // Container sample

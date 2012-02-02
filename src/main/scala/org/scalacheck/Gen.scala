@@ -97,7 +97,7 @@ sealed trait Gen[+T] {
   def map[U](f: T => U): Gen[U] = Gen(prms => this(prms).map(f)).label(label)
   
   def bimap[U, V >: T](f: T => U)(g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f),
-    (u: U) => g(u) map { t => this.c(t) } getOrElse false).label(label)
+    (u: U) => g(u) map c getOrElse false).label(label)
 
   def map2[U, V](g: Gen[U])(f: (T, U) => V) =
     combine(g)((t, u) => t.flatMap(t => u.flatMap(u => Some(f(t, u)))))
