@@ -68,20 +68,26 @@ sealed trait FiniteGen[+T] extends Gen[FiniteGenRes[T]]
 /** Class that represents a generator. */
 sealed trait Gen[+T] {
 
-  import Gen.choose
+  import Gen.{ShrinkGuard, choose}
 
   var label = "" // TODO: Ugly mutable field
-    
-  def c[U >: T](u: U): Boolean = true
   
-  def withGuard(f: T => Boolean) = new Gen[T] {
-    label = Gen.this.label
-    def apply(p: Gen.Params) = Gen.this.apply(p)
-    override def c[U >: T](u: U) = u match {
-      case t: T => f(t) // Note: this will always match because of erasure, but that should be ok
-      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
-    }  
+  def guard[U >: T]: ShrinkGuard[U] = Gen.noGuard
+  
+  def c[U >: T](u: U) = {
+    val g = guard
+    (g sizeDependentGuard u) && (g contentGuard u)
   }
+  
+  def withGuard(f: ShrinkGuard[T]) = new Gen[T] {
+    label = Gen.this.label
+    // Note: this conversion (and the application of the resulting guard) should never fail
+    //       if the guard is suitable for the generator
+    override def guard[U >: T]: ShrinkGuard[U] = f.asInstanceOf[ShrinkGuard[U]]
+    def apply(p: Gen.Params) = Gen.this.apply(p)    
+  }
+  
+  def withGuard(f: T => Boolean): Gen[T] = withGuard(Gen.mkContentGuard(f))
   
   /** Put a label on the generator to make test reports clearer */
   def label(l: String): Gen[T] = {
@@ -233,6 +239,12 @@ object Gen {
       else rng.nextDouble * (h-l) + l
     }
   }
+  
+  sealed case class ShrinkGuard[-T](sizeDependentGuard: T => Boolean, contentGuard: T => Boolean) {
+    def ignoreSizeDependent = this.copy(sizeDependentGuard = (_:T) => true)
+  }
+  def mkContentGuard[T](g: T => Boolean) = ShrinkGuard((_:T) => true, g)
+  val noGuard = ShrinkGuard((_:Any) => true, (_:Any) => true)
 
   private def alwaysTrue[T](t: T) = true
 
@@ -291,7 +303,23 @@ object Gen {
   def parameterized[T](f: Params => Gen[T], g: (T => Boolean) = alwaysTrue _): Gen[T] = Gen(prms => f(prms)(prms)) withGuard g
 
   /** Creates a generator that can access its generation size */
-  def sized[T](f: Int => Gen[T], g: (T => Boolean) = alwaysTrue _) = Gen(prms => f(prms.size)(prms)) withGuard g
+  def sized[T](f: Int => Gen[T]) = new Gen[T] {
+    /** Different instances assigned to h should be the same, not regarding p.size based differences */
+    @volatile var h: Gen[T] = null
+    
+    /** Guard of any instance in h. The size-dependent guard condition is ignored. */
+    override def guard[U >: T]: ShrinkGuard[U] = 
+      if (h == null) sys.error("Shrink guard applied before any values were generated")
+      else h.guard.ignoreSizeDependent        
+
+    def fetchGen(s: Int) = {
+      val g = f(s)
+      h = g // h is unsafe for general access now, since can be mutated by other threads
+      g       
+    }
+    
+    def apply(p: Gen.Params) = fetchGen(p.size)(p)
+  }
 
   /** Creates a resized version of a generator */
   def resize[T](s: Int, g: Gen[T]) = Gen(prms => g(prms.resize(s)))

@@ -12,22 +12,43 @@
 package org.scalacheck
 
 import Gen._
-import Prop.{forAll, someFailing, noneFailing, sizedProp}
+import Prop.{forAll, someFailing, noneFailing, sizedProp, classify, propBoolean}
 import Arbitrary._
 import Shrink._
+import Test.{Exhausted, Failed}
 
 object ShrinkGuardSpecification extends Properties("ShrinkGuard") {
 
-  // choose for Int and Long is now equipped with fence (guard)
   val g1 = choose(1, 100)
-  property("[choose] good shrink if ARG_0 = 1") = forAll(g1)((n: Int) => n > 3)
   
-  // suchThat/filter adds extra guard over present ones
-  val g2 = g1 suchThat { x => (1 <= x && x <= 100)}
-  property("[suchThat] good shrink if ARG_0 = 1") = forAll(g2)((n: Int) => n > 3)
+  def propShouldFailWithShrinkedArg[T](prms: Test.Params, p: Prop, argCond: T => Boolean) = 
+    Test.check(prms.copy(minSuccessfulTests = 1000), p).status match {
+      case Failed(Arg(_,a,_,_)::Nil,_) if argCond(a.asInstanceOf[T]) => true
+      case Exhausted => sys.error("test exhausted")
+      case x => println("***"+x); false
+    }
   
-  val g3 = g1 suchThat { x => (1 <= x && x <= 100)} suchThat { _ > 2}
-  property("[suchThat 2] good shrink if ARG_0 = 3") = forAll(g3)((n: Int) => n > 3)  
+  property("ShrinkGuard.choose") = forAll { (prms: Test.Params, a: Int, b: Int) => 
+    (a <= b) ==> {
+      val g = choose(a, b)
+      val k = ((a:Long) + b)/2
+      val p = forAll(g)((n: Int) => n > k)
+      propShouldFailWithShrinkedArg(prms, p, {(x: Int) => (a <= x && x <= k)})
+    }
+  }
+  
+  val nonExtremeRange = choose(-10000, 10000)
+    
+  property("ShrinkGuard.suchThat") = {
+    implicit val arbInt = Arbitrary(nonExtremeRange)
+    forAll { (prms: Test.Params, a: Int, b: Int) => (a + 2 <= b) ==> {
+      val (ia, ib) = (a + 1, b - 1)
+      val g = choose(a, b) suchThat { x => (ia <= x && x <= ib)}
+      val k = (((ia:Long) + ib)/2).toInt
+      val p = forAll(g){(n: Int) => n > k}
+      propShouldFailWithShrinkedArg(prms, p, {(x: Int) => (ia <= x && x <= k)})
+    }}
+  }
   
   // The mapped function would need to be a bijection in order to
   // be able to check the generated value.
@@ -43,7 +64,7 @@ object ShrinkGuardSpecification extends Properties("ShrinkGuard") {
   
   // Container sample
   val want = 3
-  val cg1 = listOfN(want, g2)
+  val cg1 = listOfN(want, g1)
   property("[listOfN] good shrink if no IOOBE and all three elem of ARG_0 is 1") = forAll(cg1) { xs: List[Int] =>
     xs(want - 1) > 3
   }
@@ -52,4 +73,7 @@ object ShrinkGuardSpecification extends Properties("ShrinkGuard") {
   val mg1 = choose(1, 10)
   val mg2 = choose(2, 10)
   property("[multi-gen forAll] good shrink if ARG_0 = (1, 2)") = forAll(mg1, mg2) { (x, y) => x > 3 && y > 3 }
+  
+  // Sized sample
+  
 }
