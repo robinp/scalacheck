@@ -72,7 +72,16 @@ sealed trait Gen[+T] {
 
   var label = "" // TODO: Ugly mutable field
     
-  def c[U >: T](u: U): Boolean
+  def c[U >: T](u: U): Boolean = true
+  
+  def withGuard(f: T => Boolean) = new Gen[T] {
+    label = Gen.this.label
+    def apply(p: Gen.Params) = Gen.this.apply(p)
+    override def c[U >: T](u: U) = u match {
+      case t: T => f(t) // Note: this will always match because of erasure, but that should be ok
+      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
+    }  
+  }
   
   /** Put a label on the generator to make test reports clearer */
   def label(l: String): Gen[T] = {
@@ -96,8 +105,8 @@ sealed trait Gen[+T] {
 
   def map[U](f: T => U): Gen[U] = Gen(prms => this(prms).map(f)).label(label)
   
-  def bimap[U, V >: T](f: T => U)(g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f),
-    (u: U) => g(u) map c getOrElse false).label(label)
+  def bimap[U, V >: T](f: T => U)(g: U => Option[V]): Gen[U] = Gen(prms => this(prms).map(f)) withGuard {
+    u => g(u) map c getOrElse false} label (label)
 
   def map2[U, V](g: Gen[U])(f: (T, U) => V) =
     combine(g)((t, u) => t.flatMap(t => u.flatMap(u => Some(f(t, u)))))
@@ -122,7 +131,7 @@ sealed trait Gen[+T] {
   def filter(p: T => Boolean): Gen[T] = Gen(prms => for {
     t <- this(prms)
     u <- if (p(t)) Some(t) else None
-  } yield u, (t:T) => p(t) && this.c(t)).label(label)
+  } yield u) withGuard {t => p(t) && c(t)} label (label)
 
   def withFilter(p: T => Boolean) = new GenWithFilter[T](this, p)
 
@@ -179,6 +188,7 @@ sealed trait Gen[+T] {
     }
   )
 
+  // TODO check if should be copied when using withGuard
   private var freq = 1
   def |[U >: T](g: Gen[U]): Gen[U] = {
     val h = Gen.frequency((freq, this), (1, g))
@@ -227,12 +237,8 @@ object Gen {
   private def alwaysTrue[T](t: T) = true
 
   /* Generator factory method */
-  def apply[T](g: Gen.Params => Option[T], f: (T => Boolean) = alwaysTrue _) = new Gen[T] {
-    def apply(p: Gen.Params) = g(p)
-    def c[U >: T](u: U) = u match {
-      case t: T => f(t) // Note: this will always match because of erasure, but that should be ok
-      case _ => sys.error("Should not happen that Gen.c gets called with non-invariant type")
-    }  
+  def apply[T](g: Gen.Params => Option[T]) = new Gen[T] {
+    def apply(p: Gen.Params) = g(p)    
   }
 
   /* Convenience method for using the <code>frequency</code> method like this:
@@ -254,14 +260,14 @@ object Gen {
       case Some(x) => builder += x
     }
     if(none) None else Some(builder.result())
-  }, f)
+  }) withGuard f
 
   /** Wraps a generator lazily. The given parameter is only evalutated once,
    *  and not until the wrapper generator is evaluated. */
   def lzy[T](g: => Gen[T]) = new Gen[T] {
     lazy val h = g
     def apply(prms: Params) = h(prms)
-    def c[U >: T](u: U): Boolean = h.c(u)
+    override def c[U >: T](u: U): Boolean = h.c(u)
   }
 
   /** Wraps a generator for later evaluation. The given parameter is
@@ -282,10 +288,10 @@ object Gen {
   }
 
   /** Creates a generator that can access its generation parameters */
-  def parameterized[T](f: Params => Gen[T], g: (T => Boolean) = alwaysTrue _): Gen[T] = Gen(prms => f(prms)(prms), g)
+  def parameterized[T](f: Params => Gen[T], g: (T => Boolean) = alwaysTrue _): Gen[T] = Gen(prms => f(prms)(prms)) withGuard g
 
   /** Creates a generator that can access its generation size */
-  def sized[T](f: Int => Gen[T], g: (T => Boolean) = alwaysTrue _) = parameterized(prms => f(prms.size), g)
+  def sized[T](f: Int => Gen[T], g: (T => Boolean) = alwaysTrue _) = Gen(prms => f(prms.size)(prms)) withGuard g
 
   /** Creates a resized version of a generator */
   def resize[T](s: Int, g: Gen[T]) = Gen(prms => g(prms.resize(s)))
